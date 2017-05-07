@@ -4,7 +4,7 @@ import pwd, grp, resource
 import StringIO
 
 from fuse import FUSE, FuseOSError, Operations
-from multiprocessing import Process
+from multiprocessing import Process, Manager
 import paho.mqtt.client as mqtt
 
 def log(f):
@@ -16,74 +16,68 @@ def log(f):
     return my_f
 
 
-class TreeData():
-    def __init__(self,payload=None,mtime=None):
-        self.payload=payload
-        self.ctime=time.time()
-        if mtime:
-            self.mtime=mtime
-        else:
-            self.mtime=time.time()
-
-    def __str__(self):
-        if isinstance(self.payload,dict):
-           if len(self.payload)<1: return '{}'
-           return '{'+','.join([x+':'+str(self.payload[x]) for x in self.payload])+'}'
-        else:
-           return str(self.payload)
-
-tree=TreeData({})
-
-def putTree(path,payload):
-    global tree
-    currpath=tree
-    for n,p in enumerate(path):
-        if p not in currpath.payload and isinstance(currpath.payload,dict):
-            currpath.payload[p]=TreeData({})
-        else:
-            currpath.mtime=time.time()
-        if n == len(path)-1:
-            t=TreeData()
-            t.payload=payload
-            t.mtime=time.time()
-            currpath.payload[p]=t
-        else:
-            currpath = currpath.payload[p]
-#    print(tree)
-
-def getTree(path):
-    global tree
-    currpath=tree
-    for p in path:
-        currpath=currpath.payload[p]
-    return currpath
-
 class MQTTClient():
-    def __init__(self,host,port=1883):
+    def __init__(self,tree,host,port=1883):
+        self.tree = tree
         self.mqtt = mqtt.Client()
         self.mqtt.on_connect=self.on_connect
         self.mqtt.on_message=self.on_message
         self.mqtt.connect(host,port)
+        print(type(tree))
+        print(repr(tree))
         self.mqtt.loop_forever() #BLOCKING
+
+    def putTree(self,path,payload):
+        tpath=[('',tree[:])]
+        for n,p in enumerate(path):
+            if p not in tpath[-1][1][0] and isinstance(tpath[-1][1][0],dict):
+                tpath[-1][1][0][p]=[{},time.time(),time.time()]
+            else:
+                tpath[-1][1][2]=time.time()
+            if n == len(path)-1:
+                t=[None,None,None]
+                t[0]=payload
+                t[1]=time.time()
+                t[2]=time.time()
+                tpath[-1][1][0][p]=t
+            else:
+                tpath.append((p,tpath[-1][1][0][p]))
+        while len(tpath)>=2:
+#            print(tpath)
+            tpath[-2][1][0][tpath[-1][0]]=tpath[-1][1]
+            del tpath[-1]
+#        print('Last tpath %s' % tpath)
+        tree[0] = tpath[0][1][0]
+        tree[1] = tpath[0][1][1]
+        tree[2] = tpath[0][1][2]
+        print(tree)
 
     def on_connect(self, client, userdata, flags, rc):
         client.subscribe("#")
 
     def on_message(self, client, userdata, msg):
         parts = filter(bool,msg.topic.split('/'))
-        putTree(parts,msg.payload)
+        self.putTree(parts,msg.payload)
 
 class MQTTFS(Operations):
-    def __init__(self):
+    def __init__(self,tree):
+        self.tree = tree
         self.filehandles={}
         self.fhmax=0
 
+    def getTree(self,path):
+        print(tree)
+        currpath=tree
+        for p in path:
+            currpath=currpath[0][p]
+        return currpath
+
     def _fixpath(self, path):
-        return filter(bool,os.path.split(path))
+        return filter(bool,path.split(os.sep))
 
     @log
     def access(self, path, mode):
-        return true
+        return True
 
     @log
     def chmod(self, path, mode):
@@ -97,21 +91,22 @@ class MQTTFS(Operations):
     def getattr(self, path, fh=None):
         data={}
         path = self._fixpath(path)
+        print(path)
         try:
-            treedata=getTree(path)
+            treedata=self.getTree(path)
         except:
             raise FuseOSError(errno.ENOENT)
-        data['st_atime']=int(treedata.mtime)
-        data['st_mtime']=int(treedata.mtime)
-        data['st_ctime']=int(treedata.ctime)
+        data['st_atime']=int(treedata[2])
+        data['st_mtime']=int(treedata[2])
+        data['st_ctime']=int(treedata[1])
         data['st_gid']=os.getgid()
-        mode = int(777,8)
-        if isinstance(treedata.payload,dict):
+        mode = int('777',8)
+        if isinstance(treedata[0],dict):
             data['st_mode']=mode + 16384
-            data['st_size']=st.st_size
+            data['st_size']=4
         else:
             data['st_mode']=mode + 32768
-            data['st_size']=len(treedata.payload())
+            data['st_size']=len(treedata[0])
         data['st_nlink']=0
         data['st_uid']=os.getuid()
         return data
@@ -121,11 +116,12 @@ class MQTTFS(Operations):
         '''Return all objects in this path'''
         path = self._fixpath(path)
         try:
-            treedata=getTree(path)
+            treedata=self.getTree(path)
         except:
             raise FuseOSError(errno.ENOENT)
-        if isinstance(treedata.payload,dict):
-            return ['.','..']+treedata.payload.keys()
+        print(treedata[0])
+        if isinstance(treedata[0],dict):
+            return ['.','..']+treedata[0].keys()
 
     def readlink(self, path):
         '''No symlinks in mqtt.'''
@@ -140,12 +136,12 @@ class MQTTFS(Operations):
         '''remove dir if empty.'''
         path = self._fixpath(path)
         try:
-            treedata=getTree(path)
+            treedata=self.getTree(path)
         except:
             raise FuseOSError(errno.ENOENT)
-        if isinstance(treedata.payload,dict):
-            if len(treedata.payload)==0:
-                getTree(path[:-1]).payload.remove(path[-1])
+        if isinstance(treedata[0],dict):
+            if len(treedata[0])==0:
+                self.getTree(path[:-1])[0].remove(path[-1])
             else:
                 raise FuseOSError(errno.ENOTEMPTY)
 
@@ -154,11 +150,11 @@ class MQTTFS(Operations):
         '''Make a new directory.'''
         path = self._fixpath(path)
         try:
-            treedata=getTree(path[-1])
+            treedata=self.getTree(path[-1])
         except:
             raise FuseOSError(errno.ENOENT)
-        if isinstance(treedata.payload,dict):
-            treedata.payload[path[-1]]=TreeData({})
+        if isinstance(treedata[0],dict):
+            treedata[0][path[-1]]=TreeData({})
 
     def rename(self, old, new):
         '''Rename a file/directory. This probably shouldn't work...'''
@@ -197,13 +193,13 @@ class MQTTFS(Operations):
         '''AKA touch. Update times on path.'''
         path = self._fixpath(path)
         try:
-            treedata=getTree(path)
+            treedata=self.getTree(path)
         except:
             raise FuseOSError(errno.ENOENT)
         if times is None:
-            treedata.mtime=time.time()
+            treedata[2]=time.time()
         else:
-            treedata.mtime=times[1] #(atime,mtime)
+            treedata[2]=times[1] #(atime,mtime)
 
     @log
     def open(self, path, flags):
@@ -216,12 +212,12 @@ class MQTTFS(Operations):
         new filehandle for you.'''
         path = self._fixpath(path)
         try:
-            treedata=getTree(path[-1])
+            treedata=self.getTree(path[-1])
         except:
             raise FuseOSError(errno.ENOENT)
-        if not isinstance(treedata.payload,dict):
+        if not isinstance(treedata[0],dict):
             raise FuseOSError(error,ENOENT)
-        treedata.payload[path[-1]]=TreeData('')
+        treedata[0][path[-1]]=TreeData('')
         if len(self.filehandles) == maxfh:
             raise FuseOSError(errno.EMFILE)
         while self.fhmax in self.filehandles.keys():
@@ -253,12 +249,12 @@ class MQTTFS(Operations):
         f = self.filehandles[fh]
         path = self._fixpath(path)
         try:
-            treedata=getTree(path)
+            treedata=self.getTree(path)
         except:
             raise FuseOSError(errno.ENOENT)
-        if isinstance(treedata.payload,dict):
+        if isinstance(treedata[0],dict):
             raise FuseOSError(error,ENOENT)
-        treedata.payload=f.read()
+        treedata[0]=f.read()
         f.flush()
 
     @log
@@ -272,21 +268,26 @@ class MQTTFS(Operations):
         '''Flushing seems not to work for some reason.'''
         return self.flush(path,fh)
 
-def mqttworker():
-    MQTTClient('arbiter')
 
-def fuseworker(mountpoint):
-    FUSE(MQTTFS(), mountpoint, nothreads=True, foreground=True)
+def mqttworker(tree):
+    MQTTClient(tree,'arbiter')
 
-def main(mountpoint):
+def fuseworker(tree,mountpoint):
+    FUSE(MQTTFS(tree), mountpoint, threads=False, foreground=True)
+
+def main(tree, mountpoint):
     jobs=[]
-    jobs.append(Process(target=mqttworker))
-    jobs.append(Process(target=fuseworker,args=(mountpoint,)))
+    jobs.append(Process(target=mqttworker,args=(tree,)))
+    jobs.append(Process(target=fuseworker,args=(tree,mountpoint)))
     for job in jobs:
         job.start()
+    for job in jobs:
+        job.join()
 
 
 if __name__ == '__main__':
-    main(sys.argv[1])
+    manager = Manager()
+    tree = manager.list([{},time.time(),time.time()])
+    main(tree, sys.argv[1])
 
 
