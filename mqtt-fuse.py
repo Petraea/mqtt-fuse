@@ -231,15 +231,20 @@ class MQTTFS(Operations):
         try:
             data = getTree(path)[0][offset:].split()
         except:
-            data = ['\0']*offset
+            data = ['']*offset
         f = self.filehandles[fh]
         newdata=['']*offset+list((f.read()+buf).strip())
         for n, c in enumerate(data):
-            if c == '':    
+            if newdata[n] == '':    
                 newdata[n]=c
+        print(newdata)
         pubdata = ''.join(newdata)
         if pubdata != '':
-            self.mqtt.publish(path,pubdata)
+            if offset == 0: #Hack here. 
+                print(path[1:], pubdata)
+                try: pubdata = float(pubdata)
+                except: pass
+                self.mqtt.publish(path[1:],pubdata)
         return True
 
     @log
