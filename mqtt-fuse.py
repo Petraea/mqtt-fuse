@@ -16,6 +16,37 @@ def log(f):
     return my_f
 
 
+def getTree(path):
+    currpath=tree
+    for p in path:
+        currpath=currpath[0][p]
+    return currpath
+
+def putTree(path,payload):
+    tpath=[('',tree[:])]
+    for n,p in enumerate(path):
+        if p not in tpath[-1][1][0] and isinstance(tpath[-1][1][0],dict):
+            tpath[-1][1][0][p]=[{},time.time(),time.time()]
+        else:
+            tpath[-1][1][2]=time.time()
+        if n == len(path)-1:
+            t=[None,None,None]
+            t[0]=payload
+            t[1]=time.time()
+            t[2]=time.time()
+            tpath[-1][1][0][p]=t
+        else:
+            tpath.append((p,tpath[-1][1][0][p]))
+    while len(tpath)>=2:
+#        print(tpath)
+        tpath[-2][1][0][tpath[-1][0]]=tpath[-1][1]
+        del tpath[-1]
+#    print('Last tpath %s' % tpath)
+    tree[0] = tpath[0][1][0]
+    tree[1] = tpath[0][1][1]
+    tree[2] = tpath[0][1][2]
+
+
 class MQTTClient():
     def __init__(self,tree,host,port=1883):
         self.tree = tree
@@ -23,41 +54,14 @@ class MQTTClient():
         self.mqtt.on_connect=self.on_connect
         self.mqtt.on_message=self.on_message
         self.mqtt.connect(host,port)
-        print(type(tree))
-        print(repr(tree))
         self.mqtt.loop_forever() #BLOCKING
-
-    def putTree(self,path,payload):
-        tpath=[('',tree[:])]
-        for n,p in enumerate(path):
-            if p not in tpath[-1][1][0] and isinstance(tpath[-1][1][0],dict):
-                tpath[-1][1][0][p]=[{},time.time(),time.time()]
-            else:
-                tpath[-1][1][2]=time.time()
-            if n == len(path)-1:
-                t=[None,None,None]
-                t[0]=payload
-                t[1]=time.time()
-                t[2]=time.time()
-                tpath[-1][1][0][p]=t
-            else:
-                tpath.append((p,tpath[-1][1][0][p]))
-        while len(tpath)>=2:
-#            print(tpath)
-            tpath[-2][1][0][tpath[-1][0]]=tpath[-1][1]
-            del tpath[-1]
-#        print('Last tpath %s' % tpath)
-        tree[0] = tpath[0][1][0]
-        tree[1] = tpath[0][1][1]
-        tree[2] = tpath[0][1][2]
-        print(tree)
 
     def on_connect(self, client, userdata, flags, rc):
         client.subscribe("#")
 
     def on_message(self, client, userdata, msg):
         parts = filter(bool,msg.topic.split('/'))
-        self.putTree(parts,msg.payload)
+        putTree(parts,msg.payload)
 
 class MQTTFS(Operations):
     def __init__(self,tree):
@@ -65,25 +69,16 @@ class MQTTFS(Operations):
         self.filehandles={}
         self.fhmax=0
 
-    def getTree(self,path):
-        print(tree)
-        currpath=tree
-        for p in path:
-            currpath=currpath[0][p]
-        return currpath
 
     def _fixpath(self, path):
         return filter(bool,path.split(os.sep))
 
-    @log
     def access(self, path, mode):
         return True
 
-    @log
     def chmod(self, path, mode):
         raise FuseOSError(errno.EPERM)
 
-    @log
     def chown(self, path, uid, gid):
         raise FuseOSError(errno.EPERM)
 
@@ -91,10 +86,10 @@ class MQTTFS(Operations):
     def getattr(self, path, fh=None):
         data={}
         path = self._fixpath(path)
-        print(path)
         try:
-            treedata=self.getTree(path)
+            treedata=getTree(path)
         except:
+            print('Raisin')
             raise FuseOSError(errno.ENOENT)
         data['st_atime']=int(treedata[2])
         data['st_mtime']=int(treedata[2])
@@ -116,10 +111,9 @@ class MQTTFS(Operations):
         '''Return all objects in this path'''
         path = self._fixpath(path)
         try:
-            treedata=self.getTree(path)
+            treedata=getTree(path)
         except:
             raise FuseOSError(errno.ENOENT)
-        print(treedata[0])
         if isinstance(treedata[0],dict):
             return ['.','..']+treedata[0].keys()
 
@@ -136,12 +130,12 @@ class MQTTFS(Operations):
         '''remove dir if empty.'''
         path = self._fixpath(path)
         try:
-            treedata=self.getTree(path)
+            treedata=getTree(path)
         except:
             raise FuseOSError(errno.ENOENT)
         if isinstance(treedata[0],dict):
             if len(treedata[0])==0:
-                self.getTree(path[:-1])[0].remove(path[-1])
+                getTree(path[:-1])[0].remove(path[-1]) #FIXME
             else:
                 raise FuseOSError(errno.ENOTEMPTY)
 
@@ -149,13 +143,21 @@ class MQTTFS(Operations):
     def mkdir(self, path, mode):
         '''Make a new directory.'''
         path = self._fixpath(path)
+        print(path)
         try:
-            treedata=self.getTree(path[-1])
+            treedata=getTree(path[:-1])
         except:
             raise FuseOSError(errno.ENOENT)
+        print(treedata)
+        if path[-1] in treedata[0]:
+            raise FuseOSError(errno.EEXIST)
         if isinstance(treedata[0],dict):
-            treedata[0][path[-1]]=TreeData({})
+            putTree(path,{})
+#            treedata[0][path[-1]]=[{},time.time(),time.time()] #FIXME
+        else:
+            raise FuseOSError(errno.ENOTDIR)
 
+    @log
     def rename(self, old, new):
         '''Rename a file/directory. This probably shouldn't work...'''
         raise FuseOSError(errno.EACCES)
@@ -193,7 +195,7 @@ class MQTTFS(Operations):
         '''AKA touch. Update times on path.'''
         path = self._fixpath(path)
         try:
-            treedata=self.getTree(path)
+            treedata=getTree(path)
         except:
             raise FuseOSError(errno.ENOENT)
         if times is None:
@@ -201,28 +203,30 @@ class MQTTFS(Operations):
         else:
             treedata[2]=times[1] #(atime,mtime)
 
-    @log
     def open(self, path, flags):
         '''Open a filehandle as an IObuffer.'''
         return self.create(path,flags)
 
-    @log
     def create(self, path, mode, fi=None):
         '''Open a nonexistent file. This will just create a new file and generate a
         new filehandle for you.'''
+        maxfh = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
         path = self._fixpath(path)
         try:
-            treedata=self.getTree(path[-1])
+            treedata=getTree(path[:-1])
         except:
             raise FuseOSError(errno.ENOENT)
         if not isinstance(treedata[0],dict):
             raise FuseOSError(error,ENOENT)
-        treedata[0][path[-1]]=TreeData('')
+        if path[-1] not in treedata[0]:
+            putTree(path,'')
+#            treedata[0][path[-1]]=['',time.time(),time.time()] #FIXME
         if len(self.filehandles) == maxfh:
             raise FuseOSError(errno.EMFILE)
         while self.fhmax in self.filehandles.keys():
             self.fhmax = (self.fhmax+1)%maxfh
         self.filehandles[self.fhmax] = StringIO.StringIO()
+        self.filehandles[self.fhmax].write(treedata[0][path[-1]][0])
         return self.fhmax
 
     @log
@@ -235,13 +239,15 @@ class MQTTFS(Operations):
     def write(self, path, buf, offset, fh):
         '''Write to the object, and publish here.'''
         f = self.filehandles[fh]
-        return f.write(f.read(offset)+buf)
+        data = str(f.read(offset)+buf).strip()
+        putTree(path,data)
+        return True
 
     @log
     def truncate(self, path, length, fh=None):
         if fh is None:
             fh = self.fhmax
-        f.trunc(length)
+        self.filehandles[fh].truncate(length)
 
     @log
     def flush(self, path, fh):
@@ -249,7 +255,7 @@ class MQTTFS(Operations):
         f = self.filehandles[fh]
         path = self._fixpath(path)
         try:
-            treedata=self.getTree(path)
+            treedata=getTree(path)
         except:
             raise FuseOSError(errno.ENOENT)
         if isinstance(treedata[0],dict):
