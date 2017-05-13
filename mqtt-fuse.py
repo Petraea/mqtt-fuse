@@ -32,21 +32,17 @@ def putTree(path,payload):
         if n == len(path)-1:
             t=[None,None,None]
             t[0]=payload
-#            print("payload %s" % payload)
             t[1]=time.time()
             t[2]=time.time()
             tpath[-1][1][0][p]=t
         else:
             tpath.append((p,tpath[-1][1][0][p]))
     while len(tpath)>=2:
-#        print(tpath)
         tpath[-2][1][0][tpath[-1][0]]=tpath[-1][1]
         del tpath[-1]
-#    print('Last tpath %s' % tpath)
     tree[0] = tpath[0][1][0]
     tree[1] = tpath[0][1][1]
     tree[2] = tpath[0][1][2]
-#    print(tree)
 
 
 class MQTTClient():
@@ -131,17 +127,8 @@ class MQTTFS(Operations):
 
     @log
     def rmdir(self, path):
-        '''remove dir if empty.'''
-        path = self._fixpath(path)
-        try:
-            treedata=getTree(path)
-        except:
-            raise FuseOSError(errno.ENOENT)
-        if isinstance(treedata[0],dict):
-            if len(treedata[0])==0:
-                getTree(path[:-1])[0].remove(path[-1]) #FIXME
-            else:
-                raise FuseOSError(errno.ENOTEMPTY)
+        '''remove dir if empty. This shouldn't be needed.'''
+        raise FuseOSError(errno.EACCES)
 
     @log
     def mkdir(self, path, mode):
@@ -157,7 +144,6 @@ class MQTTFS(Operations):
             raise FuseOSError(errno.EEXIST)
         if isinstance(treedata[0],dict):
             putTree(path,{})
-#            treedata[0][path[-1]]=[{},time.time(),time.time()] #FIXME
         else:
             raise FuseOSError(errno.ENOTDIR)
 
@@ -224,7 +210,7 @@ class MQTTFS(Operations):
             raise FuseOSError(error,ENOENT)
         if path[-1] not in treedata[0]:
             putTree(path,'')
-#            treedata[0][path[-1]]=['',time.time(),time.time()] #FIXME
+            treedata=getTree(path[:-1])
         if len(self.filehandles) == maxfh:
             raise FuseOSError(errno.EMFILE)
         while self.fhmax in self.filehandles.keys():
@@ -240,7 +226,6 @@ class MQTTFS(Operations):
             print(treedata)
             return treedata[0]
         except:
-#            raise FuseOSError(errno.ENOENT)
             f = self.filehandles[fh]
             f.seek(offset)
             return f.read(length)
