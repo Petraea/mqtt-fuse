@@ -88,7 +88,6 @@ class MQTTFS(Operations):
         try:
             treedata=getTree(path)
         except:
-            print('Raising ENOENT')
             raise FuseOSError(errno.ENOENT)
         data['st_atime']=int(treedata[2])
         data['st_mtime']=int(treedata[2])
@@ -103,7 +102,6 @@ class MQTTFS(Operations):
             data['st_size']=len(treedata[0])
         data['st_nlink']=0
         data['st_uid']=os.getuid()
-        print(treedata)
         return data
 
     @log
@@ -134,12 +132,10 @@ class MQTTFS(Operations):
     def mkdir(self, path, mode):
         '''Make a new directory.'''
         path = self._fixpath(path)
-        print(path)
         try:
             treedata=getTree(path[:-1])
         except:
             raise FuseOSError(errno.ENOENT)
-        print(treedata)
         if path[-1] in treedata[0]:
             raise FuseOSError(errno.EEXIST)
         if isinstance(treedata[0],dict):
@@ -223,7 +219,6 @@ class MQTTFS(Operations):
     def read(self, path, length, offset, fh):
         try:
             treedata=getTree(path)
-            print(treedata)
             return treedata[0]
         except:
             f = self.filehandles[fh]
@@ -239,12 +234,9 @@ class MQTTFS(Operations):
             data = ['\0']*offset
         f = self.filehandles[fh]
         newdata=['']*offset+list((f.read()+buf).strip())
-        print(data)
-        print(newdata)
         for n, c in enumerate(data):
             if c == '':    
                 newdata[n]=c
-        print(newdata)
         pubdata = ''.join(newdata)
         if pubdata != '':
             self.mqtt.publish(path,pubdata)
