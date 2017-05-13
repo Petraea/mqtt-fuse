@@ -32,6 +32,7 @@ def putTree(path,payload):
         if n == len(path)-1:
             t=[None,None,None]
             t[0]=payload
+#            print("payload %s" % payload)
             t[1]=time.time()
             t[2]=time.time()
             tpath[-1][1][0][p]=t
@@ -45,6 +46,7 @@ def putTree(path,payload):
     tree[0] = tpath[0][1][0]
     tree[1] = tpath[0][1][1]
     tree[2] = tpath[0][1][2]
+#    print(tree)
 
 
 class MQTTClient():
@@ -64,11 +66,12 @@ class MQTTClient():
         putTree(parts,msg.payload)
 
 class MQTTFS(Operations):
-    def __init__(self,tree):
+    def __init__(self,tree,host,port=1883):
         self.tree = tree
+        self.mqtt = mqtt.Client()
+        self.mqtt.connect(host,port)
         self.filehandles={}
         self.fhmax=0
-
 
     def _fixpath(self, path):
         return filter(bool,path.split(os.sep))
@@ -89,7 +92,7 @@ class MQTTFS(Operations):
         try:
             treedata=getTree(path)
         except:
-            print('Raisin')
+            print('Raising ENOENT')
             raise FuseOSError(errno.ENOENT)
         data['st_atime']=int(treedata[2])
         data['st_mtime']=int(treedata[2])
@@ -104,6 +107,7 @@ class MQTTFS(Operations):
             data['st_size']=len(treedata[0])
         data['st_nlink']=0
         data['st_uid']=os.getuid()
+        print(treedata)
         return data
 
     @log
@@ -231,16 +235,34 @@ class MQTTFS(Operations):
 
     @log
     def read(self, path, length, offset, fh):
-        f = self.filehandles[fh]
-        f.seek(offset)
-        return f.read(length)
+        try:
+            treedata=getTree(path)
+            print(treedata)
+            return treedata[0]
+        except:
+#            raise FuseOSError(errno.ENOENT)
+            f = self.filehandles[fh]
+            f.seek(offset)
+            return f.read(length)
 
     @log
     def write(self, path, buf, offset, fh):
         '''Write to the object, and publish here.'''
+        try:
+            data = getTree(path)[0][offset:].split()
+        except:
+            data = ['\0']*offset
         f = self.filehandles[fh]
-        data = str(f.read(offset)+buf).strip()
-        putTree(path,data)
+        newdata=['']*offset+list((f.read()+buf).strip())
+        print(data)
+        print(newdata)
+        for n, c in enumerate(data):
+            if c == '':    
+                newdata[n]=c
+        print(newdata)
+        pubdata = ''.join(newdata)
+        if pubdata != '':
+            self.mqtt.publish(path,pubdata)
         return True
 
     @log
@@ -279,7 +301,7 @@ def mqttworker(tree):
     MQTTClient(tree,'arbiter')
 
 def fuseworker(tree,mountpoint):
-    FUSE(MQTTFS(tree), mountpoint, threads=False, foreground=True)
+    FUSE(MQTTFS(tree,'arbiter'), mountpoint, threads=False, foreground=True)
 
 def main(tree, mountpoint):
     jobs=[]
