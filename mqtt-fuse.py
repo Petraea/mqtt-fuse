@@ -51,7 +51,7 @@ class MQTTClient():
         self.mqtt = mqtt.Client()
         self.mqtt.on_connect=self.on_connect
         self.mqtt.on_message=self.on_message
-        self.mqtt.connect(host,port)
+        self.mqtt.connect(host,port,keepalive=10)
         self.mqtt.loop_forever() #BLOCKING
 
     def on_connect(self, client, userdata, flags, rc):
@@ -65,7 +65,7 @@ class MQTTFS(Operations):
     def __init__(self,tree,host,port=1883):
         self.tree = tree
         self.mqtt = mqtt.Client()
-        self.mqtt.connect(host,port)
+        self.mqtt.connect(host,port,keepalive=10)
         self.filehandles={}
         self.fhmax=0
 
@@ -244,7 +244,7 @@ class MQTTFS(Operations):
                 print(path[1:], pubdata)
                 try: pubdata = float(pubdata)
                 except: pass
-                self.mqtt.publish(path[1:],pubdata)
+                self.mqtt.publish(path[1:],pubdata,qos=1)
         return True
 
     @log
